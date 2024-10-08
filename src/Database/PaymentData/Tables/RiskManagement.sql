@@ -1,0 +1,8 @@
+CREATE TABLE RiskManagement (
+    Id INT IDENTITY(1,1) PRIMARY KEY,
+    TransactionId UNIQUEIDENTIFIER NOT NULL FOREIGN KEY REFERENCES Transactions(Id),
+    IsFraud BIT NOT NULL,
+    IsHighRisk BIT NOT NULL,
+    RiskReason NVARCHAR(500) NULL,
+    CreatedAt DATETIME2 NOT NULL
+);

@@ -1,0 +1,5 @@
+CREATE TABLE Countries (
+    Id UNIQUEIDENTIFIER PRIMARY KEY,
+    Name NVARCHAR(100) NOT NULL UNIQUE,
+    Code NVARCHAR(3) NOT NULL UNIQUE -- Country code (e.g. 'US', 'DE')
+);
