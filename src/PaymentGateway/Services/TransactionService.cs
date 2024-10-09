@@ -9,13 +9,60 @@ namespace PaymentGatewayAPI.Services
 
 	public class TransactionService : ITransactionService
 	{
-		private readonly ApplicationDbContext _context;
+		private readonly PaymentGatewayDbContext _context;		  
+        // private readonly IStringLocalizer<GatewayController> _localizer;
+		
+		private IStringLocalizer<GatewayController> _localizer => HttpContext.RequestServices.GetService(typeof(IStringLocalizer<GatewayController>)) as IStringLocalizer<GatewayController>;
 
-		public TransactionService(ApplicationDbContext context)
+
+		public TransactionService(PaymentGatewayDbContext context)
 		{
-			_context = context;
+			_context = context;			
 		}
 
+		// public TransactionService(PaymentGatewayDbContext context, IStringLocalizer<GatewayController> _localizer)
+		// {
+		// 	_context = context;
+		// 	_localizer = localizer;
+		// }
+
+
+		public async Task<TransactionResult> CreateTransactionAsync(TransactionRequest request)
+        {
+            var transactionGuid = GenerateNewTransactionGuid();
+
+            var transaction = new Transaction
+            {
+                TransactionGuid = transactionGuid,
+                CreditCardNumber = request.CreditCardNumber,
+                Amount = request.Amount,
+                SellerCountry = request.SellerCountry,
+                TransactionDate = DateTime.UtcNow,
+                TransactionStatus = _localizer["Pending"]
+            };
+
+            _context.Transactions.Add(transaction);
+
+ 			var transactionStatus = new TransactionStatusTable
+			{
+				Id = Guid.NewGuid(), // this may be autoincrement
+				TransactionId = transaction.Id,
+				Status = _localizer["Unknown"],
+				StatusMessage = _localizer["Transaction status is currently unknown."]
+			};
+
+			_context.TransactionStatusTable.Add(transactionStatus);
+
+            await _context.SaveChangesAsync();
+
+            return new TransactionResult
+            {
+                IsSuccess = true,
+                TransactionGuid = transactionGuid
+            };
+        }
+
+		/*
 		public async Task<Guid> CreateTransactionAsync(int merchantId, decimal amount, string currency, int bankId)
 		{
 			var transactionGuid = GenerateNewTransactionGuid();
@@ -34,35 +81,33 @@ namespace PaymentGatewayAPI.Services
 
 			return transactionGuid;
 		}
+		*/
 
-		public async Task<string?> CheckTransactionStatusAsync(Guid transactionGuid)
+		public async Task<string> CheckTransactionStatusAsync(Guid transactionGuid, string url)
 		{
-			var transaction = await _context.Transactions
-				.FirstOrDefaultAsync(t => t.TransactionGuid == transactionGuid);
+			var transaction = await _context.Transactions.FirstOrDefaultAsync(t => t.TransactionGuid == transactionGuid);
 
 			if (transaction == null)
 			{
-				return null;
+				return string.Empty;
 			}
-
-			// First check: Is the transaction canceled?
+			
 			if (transaction.IsCanceled)
 			{
-				return "Canceled";
+				return _localizer["Canceled"];
 			}
-
-			// Second check: Evaluate risk based on country comparison
+			
 			if (EvaluateRisk(transaction.CardOwnerCountry, transaction.MerchantCountry))
 			{
-				transaction.TransactionStatus = "Blocked";
+				transaction.TransactionStatus = _localizer["Blocked"];
 				await _context.SaveChangesAsync();
-				return "Blocked";
+				return _localizer["Blocked"];
 			}
-
-			// If not canceled and not blocked, proceed with bank API call
-			if (transaction.TransactionStatus == "Pending")
+			
+			if (transaction.TransactionStatus == _localizer["Pending"])
 			{
-				await SimulateBankResponseAsync(transaction);
+				// await SimulateBankResponseAsync(transaction, url);
+				transaction.TransactionStatus = _localizer[ CallBankApiForStatus(transaction, url)];
 			}
 
 			return transaction.TransactionStatus;
@@ -79,27 +124,37 @@ namespace PaymentGatewayAPI.Services
 			}
 
 			transaction.IsCanceled = true;
-			transaction.TransactionStatus = "Canceled";
+			transaction.TransactionStatus = _localizer["Canceled"];
 			transaction.CanceledDate = DateTime.UtcNow;
 
 			await _context.SaveChangesAsync();
 			return true;
 		}
-
-		// Private function to generate a new GUID
+		
 		private Guid GenerateNewTransactionGuid()
 		{
 			return Guid.NewGuid();
 		}
-
-		// Private function to evaluate the risk based on the card and merchant countries
+		
 		private bool EvaluateRisk(string cardOwnerCountry, string merchantCountry)
 		{
-			// Simple rule: If the card owner and merchant are in different countries, mark as high risk
+			
 			return !string.Equals(cardOwnerCountry, merchantCountry, StringComparison.OrdinalIgnoreCase);
 		}
 
-		private async Task SimulateBankResponseAsync(Transaction transaction)
+		 // Simulated function for calling the bank's API to get the transaction status
+        // TODO: Do not forget to remove Random ;) Must implement real bank request and response. Create a new service for BankService        
+        private string CallBankApiForStatus(Transaction transaction,  string url)
+        {
+            var statuses = new[] { "Approved", "Declined", "Expired", "InsufficientFunds" };
+
+			// calling here bank api by some url from context urls 
+            // implement here
+
+            return statuses[new Random().Next(statuses.Length)];
+        }
+
+		private async Task SimulateBankResponseAsync(Transaction transaction, string url)
 		{
 			await Task.Delay(5000);
 

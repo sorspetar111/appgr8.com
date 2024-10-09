@@ -1,0 +1,6 @@
+Name							Value
+------------------------------------------------------------
+TransactionNotFound				Transaction not found.
+Canceled						Canceled
+Blocked							Blocked
+HighRiskMessage					Transaction blocked due to high risk.

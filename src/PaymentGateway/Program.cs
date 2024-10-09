@@ -4,14 +4,14 @@ using System.Globalization;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Add services to the container
+ 
 builder.Services.AddControllers();
 builder.Services.AddDbContext<PaymentGatewayDbContext>(options => options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
 
-// Add localization services
+// Add localization services with resources. Get all bank statuses and added into language resources. Do not forget to properly format resorce file. 
 builder.Services.AddLocalization(options => options.ResourcesPath = "Resources");
 
-// Configure supported cultures
+ 
 var supportedCultures = new[] { "en", "fr", "de", "es", "zh" };
 builder.Services.Configure<RequestLocalizationOptions>(options =>
 {
@@ -21,13 +21,23 @@ builder.Services.Configure<RequestLocalizationOptions>(options =>
     options.SupportedUICultures = cultures;
 });
 
-// Register services
+ 
+builder.Services.AddScoped<ITransactionService, TransactionService>();
+builder.Services.AddScoped<IBankService, BankService>();
+builder.Services.AddScoped<ICountryService, CountryService>();
+builder.Services.AddScoped<IGeoLocationService, GeoLocationService>();
 builder.Services.AddScoped<ITransactionService, TransactionService>();
 
-// Register HTTP clients
+ 
 builder.Services.AddHttpClient<GeoLocationController>();
 builder.Services.AddHttpClient<ReportsController>();
 builder.Services.AddHttpClient<GatewayController>();
+
+
+builder.Services.AddMvc()
+    .AddViewLocalization()
+    .AddDataAnnotationsLocalization();  
+
 
 var app = builder.Build();
 
@@ -40,10 +50,10 @@ if (app.Environment.IsDevelopment())
 
 app.UseAuthorization();
 
-// Enable localization
+ 
 app.UseRequestLocalization(app.Services.GetRequiredService<IOptions<RequestLocalizationOptions>>().Value);
 
-// Map controllers
+ 
 app.MapControllers();
 
 app.Run();

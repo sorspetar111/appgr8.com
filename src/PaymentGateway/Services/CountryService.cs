@@ -7,12 +7,12 @@ using System.Threading.Tasks;
 namespace PaymentGatewayAPI.Services
 {
 
-	public class BankService : IBankService
+	public class CountryService : ICountryService
 	{
 		private readonly PaymentGatewayDbContext _context;		
 
 
-		public BankService(PaymentGatewayDbContext context)
+		public CountryService(PaymentGatewayDbContext context)
 		{
 			_context = context;			
 		}

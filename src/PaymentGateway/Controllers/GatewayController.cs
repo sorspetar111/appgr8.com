@@ -18,51 +18,62 @@ namespace PaymentGatewayAPI.Controllers
 	// Async API was implemented (check TransactionService) with guide but fully implementations need que pattern and SAGA (or manual distributive transaction que manager which is very complex and need many developers and time)
 	// TODO: Fully scalable architecture? 
 
-	// TODO: Inject TransactionService
- 
-
-
+	// TODO: Inject TransactionService 
     public class GatewayController : ControllerBase
     {
         private readonly PaymentGatewayDbContext _context;
 
 		// TODO: Inject TransactionService vs direct _context aprouch or use it mix of both
 		private readonly ITransactionService _transactionService;
-         private readonly IStringLocalizer<GatewayController> _localizer;
+        private readonly IGeoLocationService _geoLocationService;
+        
+        private readonly IStringLocalizer<GatewayController> _localizer;
 
 
-        public GatewayController(PaymentGatewayDbContext context, ITransactionService transactionService, IStringLocalizer<GatewayController> localizer)
+        public GatewayController(PaymentGatewayDbContext context, ITransactionService transactionService, IGeoLocationService geoLocationService, IStringLocalizer<GatewayController> localizer)
         {
             _context = context;
             _transactionService = transactionService;
+            _geoLocationService = geoLocationService
             _localizer = localizer;
         }
+        
+   
 
-        // Endpoint to create a new transaction with a unique GUID
         [HttpPost("create")]
         public async Task<IActionResult> CreateTransaction([FromBody] TransactionRequest request)
         {
-            var transactionGuid = GenerateTransactionGuid();
+            var result = await _transactionService.CreateTransactionAsync(request);
 
-            var transaction = new Transaction
+            if (!result.IsSuccess)
             {
-                TransactionGuid = transactionGuid,
-                CreditCardNumber = request.CreditCardNumber,
-                Amount = request.Amount,
-                SellerCountry = request.SellerCountry,
-                TransactionDate = DateTime.UtcNow,
-                TransactionStatus = "Pending"
-            };
+                return BadRequest(result.ErrorMessage);
+            }
 
-            _context.Transactions.Add(transaction);
-            await _context.SaveChangesAsync();
-
-            return Ok(new { TransactionGuid = transactionGuid });
+            return Ok(result);
         }
 
-        // Endpoint to check the status of a transaction by GUID
+        // [HttpPost("create")]
+        // public async Task<IActionResult> CreateTransaction([FromBody] TransactionRequest request)
+        // {
+        //     var transactionGuid = GenerateTransactionGuid();
 
+        //     var transaction = new Transaction
+        //     {
+        //         TransactionGuid = transactionGuid,
+        //         CreditCardNumber = request.CreditCardNumber,
+        //         Amount = request.Amount,
+        //         SellerCountry = request.SellerCountry,
+        //         TransactionDate = DateTime.UtcNow,
+        //         TransactionStatus = "Pending"
+        //     };
 
+        //     _context.Transactions.Add(transaction);
+        //     await _context.SaveChangesAsync();
+
+        //     return Ok(new { TransactionGuid = transactionGuid });
+        // }
+              
         [HttpGet("status/{guid}")]
         public async Task<IActionResult> GetTransactionStatus(Guid guid)
         {
@@ -78,6 +89,9 @@ namespace PaymentGatewayAPI.Controllers
                 return Ok(new { Status = _localizer["Canceled"] });  
             }
 
+            string url = await _geoLocationService.GetServerUrlByIp(transaction.ClientIp)
+
+
             if (IsHighRisk(transaction))
             {
                 transaction.TransactionStatus = "Blocked";
@@ -90,14 +104,41 @@ namespace PaymentGatewayAPI.Controllers
                 return Ok(new { Status = _localizer[transaction.TransactionStatus] });
             }
 
-            var bankStatus = CallBankApiForStatus(transaction);
+
+            string bankStatus = await _transactionService.CheckTransactionStatusAsync(transaction.TransactionGuid, url);
+
+            // var bankStatus = CallBankApiForStatus(transaction);
             transaction.TransactionStatus = bankStatus;
             await _context.SaveChangesAsync();
 
             return Ok(new { Status = _localizer[transaction.TransactionStatus] });
         }
+       
+        [HttpPost("cancel/{guid}")]
+        public async Task<IActionResult> CancelTransaction(Guid guid)
+        {
+            var transaction = await _context.Transactions.FirstOrDefaultAsync(t => t.TransactionGuid == guid);
 
-        // [HttpGet("status/{guid}")]
+            if (transaction == null)
+            {
+                return NotFound("Transaction not found.");
+            }
+
+            if (transaction.IsCanceled)
+            {
+                return BadRequest("Transaction is already canceled.");
+            }
+          
+            var bankResponse = CallBankApiForCancellation(transaction);
+           
+            transaction.IsCanceled = true;
+            transaction.TransactionStatus = "Canceled";
+            await _context.SaveChangesAsync();
+
+            return Ok(new { Status = "Canceled", BankResponse = bankResponse });
+        }
+
+         // [HttpGet("status/{guid}")]
         private async Task<IActionResult> GetTransactionStatus_old(Guid guid)
         {
             var transaction = await _context.Transactions.FirstOrDefaultAsync(t => t.TransactionGuid == guid);
@@ -146,40 +187,78 @@ namespace PaymentGatewayAPI.Controllers
             return Ok(new { Status = transaction.TransactionStatus });
         }
 
-        // Endpoint to cancel a transaction by GUID
-        [HttpPost("cancel/{guid}")]
-        public async Task<IActionResult> CancelTransaction(Guid guid)
+        private async Task<List<TransactionWithLatestStatus>> GetAllTransactionsWithLatestStatusAsync()
         {
-            var transaction = await _context.Transactions.FirstOrDefaultAsync(t => t.TransactionGuid == guid);
+            var transactionsWithStatuses = await _context.Transactions
+                .Select(t => new TransactionWithLatestStatus
+                {
+                    TransactionId = t.Id,
+                    MerchantId = t.MerchantId,
+                    BankId = t.BankId,
+                    UserId = t.UserId,
+                    PaymentId = t.PaymentId,
+                    CreditCardNumber = t.CreditCardNumber,
+                    Amount = t.Amount,
+                    Currency = t.Currency,
+                    ClientIp = t.ClientIp,
+                    AccountCurrency = t.AccountCurrency,
+                    CurrentTransactionStatus = t.Status,
+                    CreatedAt = t.CreatedAt,
+                    UpdatedAt = t.UpdatedAt,
+                    IsHighRisk = t.IsHighRisk,
+                    LatestTransactionStatus = _localizer [t.TransactionStatuses]
+                        .OrderByDescending(ts => ts.Id)
+                        .Select(ts => ts.Status)
+                        .FirstOrDefault(),
+                    StatusMessage = _localizer[t.TransactionStatuses]
+                        .OrderByDescending(ts => ts.Id)
+                        .Select(ts => ts.StatusMessage)
+                        .FirstOrDefault()
+                })
+                .ToListAsync();
 
-            if (transaction == null)
-            {
-                return NotFound("Transaction not found.");
-            }
-
-            if (transaction.IsCanceled)
-            {
-                return BadRequest("Transaction is already canceled.");
-            }
-
-            // Simulate a call to the bank's API to confirm cancellation
-            var bankResponse = CallBankApiForCancellation(transaction);
-
-            // Update the transaction as canceled
-            transaction.IsCanceled = true;
-            transaction.TransactionStatus = "Canceled";
-            await _context.SaveChangesAsync();
-
-            return Ok(new { Status = "Canceled", BankResponse = bankResponse });
+            return transactionsWithStatuses;
         }
 
-        // Helper function to generate a unique GUID for transactions
+        private async Task<TransactionWithLatestStatus> GetTransactionsWithLatestStatusAsync(Guid id)
+        {
+            var transactionWithLatestStatus = await _context.Transactions
+                .Where(t => t.Id == id)
+                .Select(t => new TransactionWithLatestStatus
+                {
+                    TransactionId = t.Id,
+                    MerchantId = t.MerchantId,
+                    BankId = t.BankId,
+                    UserId = t.UserId,
+                    PaymentId = t.PaymentId,
+                    CreditCardNumber = t.CreditCardNumber,
+                    Amount = t.Amount,
+                    Currency = t.Currency,
+                    ClientIp = t.ClientIp,
+                    AccountCurrency = t.AccountCurrency,
+                    CurrentTransactionStatus = t.Status,
+                    CreatedAt = t.CreatedAt,
+                    UpdatedAt = t.UpdatedAt,
+                    IsHighRisk = t.IsHighRisk,
+                    LatestTransactionStatus = _localizer[t.TransactionStatuses]
+                        .OrderByDescending(ts => ts.Id)
+                        .Select(ts => ts.Status)
+                        .FirstOrDefault(),
+                    StatusMessage = _localizer[t.TransactionStatuses]
+                        .OrderByDescending(ts => ts.Id)
+                        .Select(ts => ts.StatusMessage)
+                        .FirstOrDefault()
+                })
+                .FirstOrDefaultAsync();
+
+            return transactionWithLatestStatus;
+        }
+       
         private Guid GenerateTransactionGuid()
         {
             return Guid.NewGuid();
         }
-
-        // Simulated function for checking if the transaction is high-risk
+       
         private bool IsHighRisk(Transaction transaction)
         {
             // For example, if the credit card country is different from the seller's country, it's high risk
@@ -223,5 +302,36 @@ namespace PaymentGatewayAPI.Controllers
             // Dummy implementation - replace with actual API call
             return "Cancellation Confirmed by Bank";
         }
+
+        private async Task<bool> UpdateTransactionStatusAsync(Guid transactionId, string newStatus, string statusMessage = null)
+        {             
+            var transaction = await _context.Transactions.FirstOrDefaultAsync(t => t.Id == transactionId);
+
+            if (transaction == null)
+            {
+                return false;  
+            }
+            
+            var transactionStatus = new TransactionStatusTable
+            {
+                Id = Guid.NewGuid(),
+                TransactionId = transactionId,
+                Status = newStatus,
+                StatusMessage = statusMessage ?? string.Empty  
+            };
+         
+            _context.TransactionStatusTable.Add(transactionStatus);
+            
+            transaction.Status = newStatus;
+            transaction.UpdatedAt = DateTime.UtcNow;
+            
+            await _context.SaveChangesAsync();
+
+            return true;
+        }
+
+
+
+
     }
 }
